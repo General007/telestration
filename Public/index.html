@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Drawing Game</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        /* Styles for the game list */
+        #activeGamesList {
+            margin-top: 20px;
+            padding: 0;
+            list-style: none;
+            max-height: 300px; /* Limit height if list gets long */
+            overflow-y: auto; /* Add scrollbar if needed */
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        #activeGamesList li {
+            display: flex; /* Use flexbox for alignment */
+            justify-content: space-between; /* Space out items */
+            align-items: center; /* Center items vertically */
+            padding: 10px 15px;
+            background-color: #f9f9f9;
+            border-bottom: 1px solid #eee;
+            margin: 0;
+        }
+         #activeGamesList li:last-child {
+            border-bottom: none;
+         }
+         #activeGamesList li span {
+            font-family: monospace; /* Make game code stand out */
+            font-weight: bold;
+            margin-right: 15px;
+            color: #337ab7;
+         }
+         #activeGamesList li .player-count {
+             font-size: 0.9em;
+             color: #777;
+             margin-right: auto; /* Push player count left, towards code */
+             padding-left: 10px;
+         }
+         #activeGamesList li button {
+            font-size: 0.9em;
+            padding: 5px 10px;
+            margin-left: 10px; /* Space before button */
+            /* Default join button style inherited */
+         }
+         #activeGamesList .no-games {
+             padding: 15px;
+             text-align: center;
+             color: #888;
+             font-style: italic;
+         }
+    </style>
+</head>
+<body>
+    <!-- Error message display area -->
+    <div id="errorMessage" class="container hidden"></div>
+
+    <!-- Player Login & Game Selection Screen -->
+    <div id="loginScreen" class="container">
+        <h1>Drawing Game</h1>
+
+        <!-- Name Input -->
+        <div>
+            <label for="playerName">Your Name:</label>
+            <input type="text" id="playerName" required>
+            <!-- Note: DEBUG mode in client.js will pre-fill this -->
+        </div>
+
+        <hr style="margin: 20px 0;">
+
+        <!-- Active Games List -->
+        <div>
+            <h2>Join an Available Game</h2>
+            <div id="activeGamesList">
+                <!-- Game list will be populated dynamically by client.js -->
+                <p class="no-games">Loading available games...</p>
+            </div>
+        </div>
+
+        <!-- Manual Join (Optional Fallback or for specific codes if needed) -->
+        <!-- We can hide this if the list is the primary method -->
+        <div style="margin-top: 20px; border-top: 1px dashed #ccc; padding-top: 15px;" class="hidden" >
+             <label for="gameCodeInput">Or Enter Code:</label>
+             <input type="text" id="gameCodeInput" placeholder="Enter code" style="margin-right: 5px;">
+             <button id="joinGameBtn">Join by Code</button>
+        </div>
+        <!-- Note: DEBUG mode in client.js can pre-fill gameCodeInput -->
+
+    </div> <!-- End loginScreen -->
+
+
+    <!-- Waiting Room Screen (No structural changes needed here) -->
+    <div id="waitingRoom" class="container hidden">
+        <h2>Waiting Room</h2>
+        <p>Game Code: <strong id="displayGameCode"></strong></p>
+        <p>Share this code with your team!</p>
+        <h3>Players Joined:</h3>
+        <ul id="playerList"></ul>
+        <button id="startGameBtn" class="hidden">Start Game</button>
+         <p class="waiting-message">Waiting for the Game Master to start...</p>
+    </div>
+
+    <!-- Game Screen (No structural changes needed here) -->
+    <div id="gameScreen" class="container hidden">
+        <h2>Game In Progress</h2>
+        <div id="timerDisplay"></div>
+        <div id="taskArea">
+            <!-- Content changes based on current task -->
+        </div>
+         <div id="waitingMessage" class="waiting-message hidden">Waiting for other players...</div>
+    </div>
+
+     <!-- Reveal Screen (No structural changes needed here) -->
+     <div id="revealScreen" class="container hidden">
+        <h2>Game Reveal!</h2>
+        <div id="revealContent">
+             <p class="waiting-message">Loading reveal data...</p>
+        </div>
+     </div>
+
+    <!-- Libraries (Keep these) -->
+    <script src="/socket.io/socket.io.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+	<!-- You can check for the latest version on jsDelivr or the Fabric.js site -->
+
+    <!-- Your Client Logic -->
+	<script type="module" src="/js/client.js"></script>
+
+</body>
+</html>

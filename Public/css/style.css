@@ -1,0 +1,261 @@
+/* C:\TelestrationsGameApp\public\css\style.css */
+body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+.container {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    width: 90%;
+    max-width: 800px;
+    margin-bottom: 20px;
+}
+
+.hidden {
+    display: none;
+}
+
+#loginScreen, #waitingRoom, #gameScreen, #revealScreen {
+    margin-bottom: 20px;
+}
+
+h1, h2, h3 {
+    text-align: center;
+    color: #333;
+    margin-top: 0;
+    margin-bottom: 15px;
+}
+h3 { margin-bottom: 10px;}
+
+label {
+    display: block;
+    margin: 10px 0 5px;
+    font-weight: bold;
+}
+
+input[type="text"], input[type="color"], input[type="range"], textarea {
+    width: calc(100% - 22px);
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1em;
+}
+input[type="text"] { max-width: 300px; } /* Limit width for name/code */
+
+button {
+    background-color: #5cb85c;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1em;
+    margin-top: 5px;
+    margin-right: 5px;
+    transition: background-color 0.2s ease;
+}
+
+button:hover {
+    background-color: #4cae4c;
+}
+
+button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+hr {
+    border: 0;
+    height: 1px;
+    background-color: #eee;
+    margin: 20px 0;
+}
+
+#playerList {
+    list-style: none;
+    padding: 0;
+    margin-top: 10px;
+}
+
+#playerList li {
+    background: #eee;
+    margin: 5px 0;
+    padding: 8px 12px;
+    border-radius: 4px;
+}
+
+#errorMessage {
+    color: #fff;
+    background-color: #d9534f;
+    border: 1px solid #d43f3a;
+    font-weight: bold;
+    margin-top: 0; /* Position at top */
+    margin-bottom: 20px;
+    padding: 10px 15px;
+    text-align: center;
+}
+#errorMessage.hidden { display: none; } /* Override default hidden if needed */
+
+
+#timerDisplay {
+    font-size: 1.3em;
+    font-weight: bold;
+    color: #d9534f;
+    margin: 15px 0;
+    text-align: center;
+    height: 25px; /* Reserve space */
+}
+
+#taskArea {
+    margin-top: 10px;
+}
+
+#drawingCanvas {
+    border: 1px solid #333;
+    cursor: crosshair;
+    touch-action: none; /* Prevent page scroll on touch */
+    display: block; /* Prevents extra space below */
+    margin: 0 auto; /* Center canvas */
+    background-color: #fff; /* Explicit white background */
+    max-width: 100%; /* Ensure responsiveness */
+}
+
+#drawingControls {
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #f8f8f8;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 15px; /* Spacing between controls */
+}
+
+#drawingControls label {
+    margin: 0 5px 0 0;
+    font-weight: normal; /* Less emphasis */
+}
+
+#drawingControls input[type="color"] {
+    padding: 0;
+    height: 30px;
+    width: 50px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#drawingControls input[type="range"] {
+    width: 120px;
+    height: 5px; /* Make slider thinner */
+    vertical-align: middle;
+}
+
+#drawingControls button {
+    background-color: #f0ad4e; /* Orange for clear */
+}
+#drawingControls button:hover {
+    background-color: #ec971f;
+}
+
+
+textarea#promptInput, textarea#guessInput {
+    height: 70px;
+    resize: vertical;
+}
+
+#promptDisplay, #drawingDisplay {
+    margin-bottom: 15px;
+    padding: 15px;
+    background-color: #e9e9e9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    word-wrap: break-word; /* Wrap long prompts/guesses */
+}
+
+#promptDisplay strong {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+}
+
+#drawingDisplay img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+    border: 1px solid #ccc;
+    background-color: #fff; /* Ensure white bg if image is transparent */
+}
+
+#revealScreen .thread {
+    border: 1px solid #ccc;
+    margin-bottom: 25px;
+    padding: 15px;
+    border-radius: 5px;
+    background-color: #fff;
+}
+
+#revealScreen .thread h3 {
+    margin-top: 0;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 10px;
+    text-align: left;
+    color: #0275d8;
+}
+
+#revealScreen .step {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px dashed #ddd;
+}
+
+#revealScreen .step:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+#revealScreen .step p {
+    margin: 5px 0;
+    font-size: 1.1em;
+}
+
+#revealScreen .step img {
+    max-width: 400px; /* Limit reveal image size */
+    height: auto;
+    display: block;
+    margin-top: 10px;
+    border: 1px solid #ccc;
+}
+
+#revealScreen .step p em { /* Player name */
+    font-style: normal;
+    color: #555;
+    display: block;
+    margin-bottom: 5px;
+    font-size: 0.9em;
+}
+
+#revealScreen .step p strong { /* Type label */
+     color: #333;
+     margin-right: 5px;
+}
+
+.waiting-message {
+    text-align: center;
+    font-style: italic;
+    color: #666;
+    margin-top: 20px;
+    padding: 10px;
+}
