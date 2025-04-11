@@ -1,349 +1,329 @@
-// C:\TelestrationsGameApp\socketHandlers.js
+// telestration/socketHandlers.js - Fixed waiting game broadcast
 
-const gameLogic = require('./gameLogic'); // Import game logic functions
-const helpers = require('./helpers');   // Import helper functions
-// Note: db is passed into the initialize function, no need to require it here directly
+const gameLogic = require('./gameLogic');
+const helpers = require('./helpers'); // Ensure helpers is required
 
-// --- State specific to socket handling ---
-let activeTimers = {}; // Moved from server.js { gameCode: { timerId: <timeoutId>, phase: '...' } }
-let connectedSockets = new Set(); // Moved from server.js
+// Store active timers (gameId -> { timerId, timeoutValue })
+const activeTimers = {};
 
-// Add near top of socketHandlers.js
-let gameAssignments = {}; // Stores current assignments { gameCode: { phase: 'drawing'/'guessing', assignments: { threadId: playerId, ... } } }
-
-function initializeSocketHandlers(io, db) { // Accept io and db instances
-
-    // --- Main Connection Handler ---
+// Function to initialize socket event handlers
+function initializeSocketHandlers(io, db) {
     io.on('connection', (socket) => {
-        console.log(`User connected: ${socket.id}`);
-        connectedSockets.add(socket.id);
+        console.log(`Socket connected: ${socket.id}`);
 
-        // Send current waiting games list to the newly connected client
-        // Pass db instance to the helper function
-        helpers.getWaitingGames(db).then(games => {
-            socket.emit('active_games_list', games);
-        }).catch(err => console.error(`Error sending initial game list to ${socket.id}:`, err));
-
-
-        socket.on('disconnect', async () => {
-            console.log(`User disconnected: ${socket.id}`);
-            connectedSockets.delete(socket.id);
-            try {
-                const playerData = await db.findPlayerDataBySocket(socket.id);
-
-                if (playerData) {
-                    const { player_id, game_id, game_code, status } = playerData;
-
-                     // Deactivate player first
-                    try {
-                         await db.deactivatePlayer(player_id);
-                         console.log(`Player ${player_id} marked as inactive in game ${game_code}`);
-                     } catch (deactivateErr) {
-                          console.error(` -> ERROR during db.deactivatePlayer for PlayerID ${player_id}:`, deactivateErr);
-                          return; // Stop processing if deactivate fails
-                     }
-
-                    // Broadcast updated waiting list if player leaves a waiting game (with delay)
-                    if(status === 'waiting' && game_code) {
-                        console.log(` -> Player ${player_id} left waiting game ${game_code}. Delaying broadcast...`);
-                        setTimeout(async () => {
-                             console.log(` -> Executing delayed broadcast for ${game_code} after disconnect.`);
-                             // Pass io and db to helper
-                             await helpers.broadcastWaitingGames(io, db);
-                        }, 1000); // Delay 1 second
-                    }
-
-                    // Check game state *after* delay if possible, or just get players now
-                    const gameExistsCheck = await db.getGameSettings(game_id);
-                    if (gameExistsCheck && game_code) {
-                        const playersInGame = await db.getActivePlayers(game_id);
-                        if (playersInGame.length > 0) {
-                             io.to(game_code).emit('player_left', { playerId: player_id, players: playersInGame });
-                        } else {
-                            console.log(`Last player left game ${game_code}.`);
-                        }
-                        // Check phase completion only if game exists and wasn't waiting/finished/revealing
-                         if (status !== 'waiting' && status !== 'revealing' && status !== 'finished') {
-                             // Pass io, db, activeTimers to gameLogic function
-                             await gameLogic.checkPhaseCompletion(io, db, activeTimers, gameAssignments, game_code, game_id);
-                         }
-                    } else {
-                         console.log(` -> Game ${game_code} (ID:${game_id}) not found after player ${player_id} disconnect. Skipping further updates.`);
-                    }
-
-                } else {
-                    console.log(` -> No active player data found for disconnected socket: ${socket.id}`);
-                }
-            } catch (err) {
-                console.error('Error during disconnect handling sequence:', err);
-            }
-        }); // End socket.on('disconnect')
-
-        // --- Socket Event Handlers ---
-
-        // Handles game creation (Admin IS the GM)
+        // --- Handler: Create Game ---
         socket.on('create_game', async (data) => {
-            // Default config values should ideally be managed centrally, maybe passed from server.js
-            const MAX_ROUNDS_DEFAULT = 2;
-            const PROMPT_TIME_DEFAULT = 60;
-            const DRAW_TIME_DEFAULT = 300;
-            const GUESS_TIME_DEFAULT = 120;
-            const DEBUG_GAME_CODE = 'DEBUG'; // Should match constant in server.js
-            const DEBUG_MODE = true; // Should match constant in server.js
-
-            const playerName = data.playerName?.trim() || 'Admin';
-            const requestedGameCode = data.gameCode?.trim().toUpperCase();
-            let gameCode;
-            if (requestedGameCode) { gameCode = requestedGameCode; }
-            else if (DEBUG_MODE) { gameCode = DEBUG_GAME_CODE; }
-            else { gameCode = helpers.generateGameCode(); } // Use helper
-            const isDebugOrSpecific = (gameCode === DEBUG_GAME_CODE || requestedGameCode);
-
-            const numRounds = parseInt(data.numRounds, 10) || MAX_ROUNDS_DEFAULT;
-            const promptTime = parseInt(data.promptTime, 10) || PROMPT_TIME_DEFAULT;
-            const drawTime = parseInt(data.drawTime, 10) || DRAW_TIME_DEFAULT;
-            const guessTime = parseInt(data.guessTime, 10) || GUESS_TIME_DEFAULT;
-
-            console.log(`Attempting to create game: ${gameCode} requested by ${playerName} with config: R=${numRounds}, T(P/D/G)=${promptTime}/${drawTime}/${guessTime}`);
+            console.log(`Admin ${socket.id} attempting to create game:`, data);
+            const { gameCode, playerName, numRounds, promptTime, drawTime, guessTime } = data;
+            // TODO: Add validation for input data
 
             try {
-                console.log(`Checking DB for existing game code: ${gameCode}`);
-                if (isDebugOrSpecific) {
-                    const existingGame = await db.getGameSettings(null, gameCode);
-                    if (existingGame) {
-                        console.log(`Attempted to create game ${gameCode}, but found existing game ID: ${existingGame.game_id}.`);
-                        return socket.emit('error_message', `Game code '${gameCode}' already exists. Try joining or use a different code.`);
-                    } else {
-                         console.log(`Game code ${gameCode} not found in DB. Proceeding with creation.`);
-                    }
-                }
-
-                // Call DB function (ensure db.js has the version that adds player/GM)
+                // Use db module to create game and player (GM)
                 const { gameId, playerId } = await db.createGameAndPlayer(
-                    gameCode, playerName, socket.id,
-                    numRounds, promptTime, drawTime, guessTime
+                    gameCode || helpers.generateGameCode(), // Generate code if blank
+                    playerName || 'Admin', // Default name
+                    socket.id, // Associate socket ID with GM
+                    numRounds || 2,
+                    promptTime || 60,
+                    drawTime || 300,
+                    guessTime || 120
                 );
 
-                socket.join(gameCode); // Creator joins the room
+                // Auto-join the creator (GM) to the game room
+                socket.join(gameCode);
+                console.log(`Admin ${socket.id} (Player ID: ${playerId}) created and joined Game ${gameCode} (ID: ${gameId}).`);
 
-                socket.emit('game_created', {
-                    gameCode, gameId, playerId, playerName,
-                    isGameMaster: true,
-                    players: [{ player_id: playerId, player_name: playerName }]
-                });
-                console.log(`Game ${gameCode} created by GM ${playerName} (PlayerID: ${playerId}) with custom config.`);
+                // Send confirmation back to the creator
+                socket.emit('game_created', { gameCode: gameCode, playerId: playerId, gameId: gameId, playerName: playerName || 'Admin' });
 
-                console.log(` -> Game ${gameCode} created successfully. Broadcasting game list...`);
-                await helpers.broadcastWaitingGames(io, db); // Pass io, db
-                console.log(` -> Broadcast complete after game creation.`);
+                // *** FIX: Broadcast updated waiting games list to EVERYONE ***
+                await helpers.broadcastWaitingGames(io); // Use await if broadcastWaitingGames is async
 
             } catch (err) {
-                console.error(`Error creating game ${gameCode}:`, err);
-                if (err.message && err.message.includes('UNIQUE KEY')) {
-                     socket.emit('error_message', 'Failed to create game (code conflict). Please try again.');
-                } else {
-                    socket.emit('error_message', 'Failed to create game. Database error.');
-                }
+                console.error("Error creating game:", err);
+                socket.emit('error_message', `Failed to create game: ${err.message}`);
             }
-        }); // End socket.on('create_game')
+        });
 
-        // Handles players joining a game
+        // --- Handler: Join Game ---
         socket.on('join_game', async (data) => {
-            const gameCode = data.gameCode?.trim().toUpperCase();
-            const playerName = data.playerName?.trim();
-
-            if (!gameCode || !playerName) {
-                console.warn(`Join attempt failed: Missing gameCode or playerName.`);
-                return socket.emit('error_message', 'Please provide game code and name.');
-            }
-
-            console.log(`Player ${playerName} attempting to join game ${gameCode}`);
+            const { gameCode, playerName } = data;
+            console.log(`Player ${playerName} (${socket.id}) attempting to join game ${gameCode}`);
+            // TODO: Add validation for player name
 
             try {
-                const game = await db.getGameSettings(null, gameCode);
-
-                if (!game) {
-                    console.log(`Join attempt failed: Game ${gameCode} not found.`);
-                    await helpers.broadcastWaitingGames(io, db);
-                    return socket.emit('error_message', 'Game not found. It might have started or ended.');
+                // Find game settings by code
+                const gameSettings = await db.getGameSettings(null, gameCode);
+                if (!gameSettings || gameSettings.status !== 'waiting') {
+                    throw new Error(`Game ${gameCode} not found or not waiting for players.`);
                 }
 
-                if (game.status !== 'waiting') {
-                     console.log(`Join attempt failed: Game ${gameCode} is in status ${game.status}.`);
-                     await helpers.broadcastWaitingGames(io, db);
-                     return socket.emit('error_message', 'Game has already started or finished.');
-                }
+                const gameId = gameSettings.game_id;
+                let playerId;
+                let joiningAs = playerName; // Store the name they intend to join as
 
-                let playerId = null;
-                let joined = false;
-                let isRejoin = false;
-
-                const inactivePlayerId = await db.findInactivePlayer(game.game_id, playerName);
+                // Check if player is rejoining (inactive with same name)
+                const inactivePlayerId = await db.findInactivePlayer(gameId, playerName);
                 if (inactivePlayerId) {
+                    console.log(`Player ${playerName} is rejoining game ${gameCode}.`);
                     await db.reactivatePlayer(inactivePlayerId, socket.id);
                     playerId = inactivePlayerId;
-                    joined = true;
-                    isRejoin = true;
-                    console.log(`Player ${playerName} (ID: ${playerId}) reactivated/rejoined WAITING game ${gameCode}`);
+                     // Re-fetch game settings if needed, or assume they are current
                 } else {
-                    // Standard join
-                    try {
-                        const currentPlayers = await db.getActivePlayers(game.game_id);
-                        let isFirstPlayer = (game.game_master_player_id === null);
-
-                        if (isFirstPlayer) { console.log(`First player (${playerName}) joining game ${gameCode}. Will be set as GM.`); }
-
-                        playerId = await db.addPlayerToGame(game.game_id, playerName, socket.id);
-                        joined = true;
-                        console.log(`Player ${playerName} (ID: ${playerId}) added to WAITING game ${gameCode}`);
-
-                        if (isFirstPlayer) {
-                             await db.setGameMaster(game.game_id, playerId);
-                             console.log(`Player ${playerId} (${playerName}) set as Game Master for game ${game.game_id}`);
-                        }
-                        console.log(` -> New player joined ${gameCode}. Broadcasting game list...`);
-                        await helpers.broadcastWaitingGames(io, db);
-                        console.log(` -> Broadcast complete after new player join.`);
-                    } catch (err) {
-                        if (err.message && err.message.includes('Name already taken')) {
-                             return socket.emit('error_message', `Name '${playerName}' is already taken in this game.`);
-                        } else {
-                            console.error(`DB Error adding player ${playerName} to game ${gameCode}:`, err);
-                            return socket.emit('error_message', err.message || 'Failed to add player.');
-                        }
-                    }
+                    // Add new player to the game (checks for active duplicate names)
+                    playerId = await db.addPlayerToGame(gameId, playerName, socket.id);
                 }
 
-                if (joined) {
-                    socket.join(gameCode);
-                    const updatedGame = await db.getGameSettings(game.game_id);
-                    const playersInGame = await db.getActivePlayers(game.game_id);
-                    const isGameMaster = updatedGame.game_master_player_id === playerId;
+                socket.join(gameCode); // Join the Socket.IO room
 
-                    socket.emit('game_joined', {
-                        gameCode, gameId: updatedGame.game_id, playerId, playerName,
-                        isGameMaster, players: playersInGame, gameStatus: updatedGame.status
-                    });
+                // Fetch updated player list for the room
+                const players = await db.getActivePlayers(gameId);
 
-                    // Notify others
-                    socket.to(gameCode).emit('player_joined', { players: playersInGame });
-                    console.log(`Notified room ${gameCode} that player ${playerName} ${isRejoin ? 'rejoined' : 'joined'}.`);
-                }
+                // Notify everyone in the room (including newcomer) about the updated player list
+                io.to(gameCode).emit('player_list_update', players);
+                 // Send confirmation *to the joining player only*
+                socket.emit('game_joined', {
+                    gameCode: gameCode,
+                    playerId: playerId,
+                    gameId: gameId,
+                    playerName: joiningAs, // Send back the name they used
+                    settings: gameSettings // Send game settings (timer limits etc)
+                 });
+
+                console.log(`Player ${joiningAs} (Player ID: ${playerId}, Socket: ${socket.id}) joined Game ${gameCode}. Room size: ${io.sockets.adapter.rooms.get(gameCode)?.size}`);
+
+                // Broadcast updated waiting games list as player count changed
+                await helpers.broadcastWaitingGames(io);
+
             } catch (err) {
-                console.error(`Error processing join request for game ${gameCode}:`, err);
-                socket.emit('error_message', 'Failed to join game (server error).');
+                console.error(`Error joining game ${gameCode} for player ${playerName}:`, err);
+                socket.emit('error_message', `Failed to join game: ${err.message}`);
             }
-        }); // End socket.on('join_game')
+        });
+
+        // --- Handler: Request Waiting Games ---
+        // Client explicitly asks for the list (e.g., on initial page load)
+        socket.on('request_waiting_games', async () => {
+            console.log(`Socket ${socket.id} requested waiting games list.`);
+            try {
+                const waitingGames = await helpers.getWaitingGames(); // Directly get games
+                socket.emit('waiting_games_list', waitingGames); // Send only to requesting client
+            } catch (err) {
+                console.error("Error fetching waiting games for single client:", err);
+                socket.emit('waiting_games_list', []); // Send empty list on error
+            }
+        });
 
 
-        // Request a random prompt
+        // --- Handler: Start Game ---
+        socket.on('start_game', async (data) => {
+            const { gameCode } = data;
+            try {
+                console.log(`Attempting to start game ${gameCode} by socket ${socket.id}`);
+                // Authenticate: Only GM can start
+                const playerData = await db.findPlayerDataBySocket(socket.id);
+                const gameSettings = await db.getGameSettings(null, gameCode);
+
+                if (!playerData || !gameSettings || playerData.game_id !== gameSettings.game_id) {
+                    throw new Error("Player or game not found.");
+                }
+                if (gameSettings.game_master_player_id !== playerData.player_id) {
+                    throw new Error("Only the Game Master can start the game.");
+                }
+                if (gameSettings.status !== 'waiting') {
+                     throw new Error("Game is not in a 'waiting' state.");
+                 }
+                const players = await db.getActivePlayers(gameSettings.game_id);
+                 if (players.length < 2) { // Need at least 2 players
+                     throw new Error("Need at least 2 players to start.");
+                 }
+
+                // --- Start Game Logic (moved to gameLogic) ---
+                await gameLogic.startGame(io, db, gameSettings.game_id, activeTimers);
+
+                // Broadcast updated waiting games list as this game is no longer waiting
+                await helpers.broadcastWaitingGames(io);
+
+            } catch (err) {
+                console.error(`Error starting game ${gameCode}:`, err);
+                socket.emit('error_message', `Failed to start game: ${err.message}`);
+            }
+        });
+
+         // --- Handler: Submit Prompt ---
+        socket.on('submit_prompt', async (data) => {
+            const { gameCode, playerId, promptText } = data;
+            // TODO: Add validation
+            try {
+                console.log(`Player ${playerId} submitting prompt for ${gameCode}`);
+                const gameSettings = await db.getGameSettings(null, gameCode);
+                if (!gameSettings || (gameSettings.status !== 'prompting' && gameSettings.status !== 'waiting')) { // Allow submission even if somehow back in waiting? Or just prompting.
+                    throw new Error("Game not found or not accepting prompts.");
+                }
+                 const gameId = gameSettings.game_id;
+
+                // Find the player's specific thread ID (prompt originates thread)
+                const threadId = await db.getThreadIdForPlayerPrompt(gameCode, playerId);
+                if (!threadId) {
+                    throw new Error(`Could not find active thread for player ${playerId} in game ${gameCode}`);
+                }
+
+                // Save the step (Step 0: Prompt)
+                await db.saveStep(threadId, playerId, 0, 'prompt', promptText, null);
+                console.log(`Saved prompt for P:${playerId} T:${threadId} G:${gameId}`);
+
+                 // Notify submission successful
+                 socket.emit('submission_accepted', { stepType: 'prompt' });
+
+                // Check if phase complete
+                await gameLogic.checkPhaseCompletion(io, db, gameId, false, activeTimers);
+
+            } catch (err) {
+                console.error(`Error submitting prompt for P:${playerId} G:${gameCode}:`, err);
+                socket.emit('error_message', `Failed to submit prompt: ${err.message}`);
+            }
+        });
+
+        // --- Handler: Submit Drawing ---
+        socket.on('submit_drawing', async (data) => {
+            const { gameCode, playerId, threadId, drawingData } = data; // drawingData expected as base64 data URL string
+            try {
+                console.log(`Player ${playerId} submitting drawing for T:${threadId} G:${gameCode}`);
+                const gameSettings = await db.getGameSettings(null, gameCode);
+                 if (!gameSettings || (gameSettings.status !== 'initial_drawing' && gameSettings.status !== 'drawing')) {
+                    throw new Error("Game not found or not accepting drawings.");
+                }
+                const gameId = gameSettings.game_id;
+
+                // Determine current step number based on game state
+                // This needs refinement - relies on accurate status/round tracking
+                const stepNumber = gameLogic.calculateCurrentStepNumber(gameSettings); // Use helper function
+
+                if (stepNumber === null) {
+                    throw new Error("Could not determine current step number from game state.");
+                }
+
+                // Convert base64 data URL to Buffer for BYTEA storage
+                // Assumes format like "data:image/png;base64,iVBORw0KGgo..."
+                let imageBuffer = null;
+                if (drawingData && drawingData.startsWith('data:image/')) {
+                    const base64Data = drawingData.split(',')[1];
+                    if(base64Data) {
+                        imageBuffer = Buffer.from(base64Data, 'base64');
+                    } else {
+                         throw new Error("Invalid drawing data format (missing data).");
+                    }
+                } else if (drawingData) {
+                     throw new Error("Invalid drawing data format (not a data URL).");
+                 } else {
+                     throw new Error("Missing drawing data.");
+                 }
+
+                // Save the step
+                await db.saveStep(threadId, playerId, stepNumber, 'drawing', null, imageBuffer);
+                console.log(`Saved drawing Step #${stepNumber} for P:${playerId} T:${threadId} G:${gameId}`);
+
+                // Notify submission successful
+                socket.emit('submission_accepted', { stepType: 'drawing' });
+
+                // Check if phase complete
+                await gameLogic.checkPhaseCompletion(io, db, gameId, false, activeTimers);
+
+            } catch (err) {
+                console.error(`Error submitting drawing for P:${playerId} T:${threadId} G:${gameCode}:`, err);
+                socket.emit('error_message', `Failed to submit drawing: ${err.message}`);
+            }
+        });
+
+        // --- Handler: Submit Guess ---
+        socket.on('submit_guess', async (data) => {
+            const { gameCode, playerId, threadId, guessText } = data;
+            try {
+                console.log(`Player ${playerId} submitting guess for T:${threadId} G:${gameCode}`);
+                const gameSettings = await db.getGameSettings(null, gameCode);
+                 if (!gameSettings || gameSettings.status !== 'guessing') {
+                    throw new Error("Game not found or not accepting guesses.");
+                }
+                 const gameId = gameSettings.game_id;
+
+                 // Determine current step number
+                 const stepNumber = gameLogic.calculateCurrentStepNumber(gameSettings); // Use helper function
+                 if (stepNumber === null) {
+                     throw new Error("Could not determine current step number from game state.");
+                 }
+
+                // Save the step
+                await db.saveStep(threadId, playerId, stepNumber, 'guess', guessText, null);
+                console.log(`Saved guess Step #${stepNumber} for P:${playerId} T:${threadId} G:${gameId}`);
+
+                // Notify submission successful
+                socket.emit('submission_accepted', { stepType: 'guess' });
+
+                // Check if phase complete
+                await gameLogic.checkPhaseCompletion(io, db, gameId, false, activeTimers);
+
+            } catch (err) {
+                console.error(`Error submitting guess for P:${playerId} T:${threadId} G:${gameCode}:`, err);
+                socket.emit('error_message', `Failed to submit guess: ${err.message}`);
+            }
+        });
+
+        // --- Handler: Get Random Prompt ---
         socket.on('get_random_prompt', async () => {
             try {
                 const prompt = await db.getRandomPrompt();
-                socket.emit('random_prompt_result', { prompt });
+                socket.emit('random_prompt_result', prompt);
             } catch (err) {
                 console.error("Error getting random prompt:", err);
-                socket.emit('random_prompt_result', { prompt: 'Error fetching prompt' });
+                socket.emit('error_message', "Failed to get random prompt.");
             }
         });
 
-	// MODIFY start_game handler in socketHandlers.js
-	socket.on('start_game', async (data) => {
-		const { gameCode, playerId } = data;
-		try {
-			const game = await db.getGameSettings(null, gameCode);
-			// --- Keep existing checks ---
-			if (!game) return socket.emit('error_message', 'Game not found.');
-			if (playerId !== game.game_master_player_id) return socket.emit('error_message', 'Only the Game Master can start.');
-			if (game.status !== 'waiting') return socket.emit('error_message', 'Game already started/finished.');
-			const players = await db.getActivePlayers(game.game_id);
-			if (players.length < 2) return socket.emit('error_message', 'Need at least 2 players.');
-			// --- End checks ---
 
-			// *** Change: Still go to 'prompting', round 0 first ***
-			await db.updateGameStatus(game.game_id, 'prompting', 'prompt', 0); // Start at round 0 for prompting
-			// *** Change: Create threads BEFORE prompting ***
-			// This ensures a thread exists even if a player fails the first prompt
-			await db.createThreadsForPlayers(game.game_id, players);
-			console.log(` -> Created initial threads for ${players.length} players.`);
-
-			io.to(gameCode).emit('game_started', { players });
-			io.to(gameCode).emit('task_prompt');
-			// Use gameLogic's timer function - still for prompting phase
-			gameLogic.startPhaseTimer(io, activeTimers, db, gameCode, game.game_id, 'prompting', game.prompt_time_limit_sec);
-
-			console.log(`Game ${gameCode} started, entering prompting phase.`);
-			await helpers.broadcastWaitingGames(io, db);
-
-		} catch (err) {
-			console.error(`Error starting game ${gameCode}:`, err);
-			socket.emit('error_message', 'Failed to start game. Database error.');
-		}
-	});
-
-        // Player submits initial prompt
-        socket.on('submit_prompt', async (data) => {
-            const { gameCode, playerId, promptText } = data;
-            if (!promptText?.trim()) return socket.emit('error_message', 'Prompt cannot be empty.');
+        // --- Handler: Disconnect ---
+        socket.on('disconnect', async (reason) => {
+            console.log(`Socket disconnected: ${socket.id}, Reason: ${reason}`);
             try {
-                const game = await db.getGameSettings(null, gameCode);
-                 if (!game) return socket.emit('error_message', 'Game not found during prompt submission.');
-                const threadId = await db.getThreadIdForPlayerPrompt(gameCode, playerId);
-                if (!threadId) throw new Error('Could not find active thread for player prompt.');
-                await db.saveStep(threadId, playerId, 0, 'prompt', promptText.trim(), null);
-                socket.emit('submission_received', { type: 'prompt' });
-                // Call gameLogic function, pass dependencies
-                await gameLogic.checkPhaseCompletion(io, db, activeTimers, gameAssignments, gameCode, game.game_id);
+                // Find player associated with this socket
+                const playerData = await db.findPlayerDataBySocket(socket.id);
+                if (playerData) {
+                    const { player_id: playerId, game_id: gameId, game_code: gameCode, status } = playerData;
+                    console.log(`Player ${playerId} in Game ${gameCode} (ID: ${gameId}) disconnected.`);
+
+                    // Mark player as inactive in DB (keeps record, clears socket_id)
+                    // Note: Deactivating threads now handled by timeout/missed submission
+                    // await db.deactivatePlayer(playerId); // Consider if immediate deactivation is desired
+
+                    // Only broadcast updates if game is still active/waiting
+                    if (status === 'waiting' || status === 'prompting' || status === 'initial_drawing' || status === 'drawing' || status === 'guessing') {
+                        // Fetch updated player list
+                         const players = await db.getActivePlayers(gameId);
+                        // Notify room members
+                        io.to(gameCode).emit('player_list_update', players);
+                        console.log(`Notified room ${gameCode} of player ${playerId} disconnection.`);
+
+                        // If game was waiting, broadcast updated games list
+                        if (status === 'waiting') {
+                            await helpers.broadcastWaitingGames(io);
+                        } else {
+                            // If game in progress, check if disconnection impacts phase completion
+                            // checkPhaseCompletion will run on timeout anyway, but could check sooner?
+                            // Optional: Trigger an early check? Depends on desired dropout handling speed.
+                             // await gameLogic.checkPhaseCompletion(io, db, gameId, false, activeTimers);
+                         }
+                    }
+                } else {
+                    console.log(`No active player found for disconnected socket ${socket.id}`);
+                }
             } catch (err) {
-                console.error(`Error submitting prompt for P:${playerId} G:${gameCode}:`, err);
-                socket.emit('error_message', `Failed to save prompt: ${err.message}`);
+                console.error(`Error handling disconnect for socket ${socket.id}:`, err);
             }
         });
 
-        // Player submits drawing
-        socket.on('submit_drawing', async (data) => {
-            const { gameCode, playerId, drawingDataUrl, threadId } = data;
-            if (!drawingDataUrl || !threadId) return socket.emit('error_message', 'Drawing data or context missing.');
-            try {
-                const base64Data = drawingDataUrl.split(',')[1];
-                if (!base64Data) throw new Error('Invalid drawing data format.');
-                const imageBuffer = Buffer.from(base64Data, 'base64');
-                const game = await db.getGameSettings(null, gameCode);
-                if (!game) throw new Error('Game not found for drawing submission.');
-                const stepNumber = (game.current_round * 2) - 1;
-                await db.saveStep(threadId, playerId, stepNumber, 'drawing', null, imageBuffer);
-                socket.emit('submission_received', { type: 'drawing' });
-                // Call gameLogic function, pass dependencies
-                await gameLogic.checkPhaseCompletion(io, db, activeTimers, gameAssignments, gameCode, game.game_id);
-            } catch (err) {
-                console.error(`Error submitting drawing for P:${playerId} T:${threadId}:`, err);
-                socket.emit('error_message', `Failed to save drawing: ${err.message}`);
-            }
-        });
+    }); // end io.on('connection')
 
-        // Player submits guess
-        socket.on('submit_guess', async (data) => {
-            const { gameCode, playerId, guessText, threadId } = data;
-            if (!guessText?.trim() || !threadId) return socket.emit('error_message', 'Guess or context missing.');
-            try {
-                const game = await db.getGameSettings(null, gameCode);
-                if (!game) throw new Error('Game not found for guess submission.');
-                const stepNumber = game.current_round * 2;
-                await db.saveStep(threadId, playerId, stepNumber, 'guess', guessText.trim(), null);
-                socket.emit('submission_received', { type: 'guess' });
-                // Call gameLogic function, pass dependencies
-                await gameLogic.checkPhaseCompletion(io, db, activeTimers, gameAssignments, gameCode, game.game_id);
-            } catch (err) {
-                console.error(`Error submitting guess for P:${playerId} T:${threadId}:`, err);
-                socket.emit('error_message', `Failed to save guess: ${err.message}`);
-            }
-        });
+    console.log("Socket handlers initialized.");
+} // end initializeSocketHandlers
 
-    }); // End io.on('connection')
-} // End initializeSocketHandlers function
 
-module.exports = {
-    initializeSocketHandlers
-    // We don't export activeTimers or connectedSockets directly,
-    // they are managed internally by this module now.
-};
+module.exports = { initializeSocketHandlers, activeTimers };

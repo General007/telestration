@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let fabricCanvas = null;    // Reference to the active Fabric.js canvas instance
     let clientTimerInterval = null; // ID for the visual countdown interval timer
     let submissionMade = false; // Flag: Has the user submitted for the current task?
+    let activityDetectedThisPhase = false; // Added flag for user interaction
 
     // --- UI Elements Cache ---
     // Get references to major UI containers and elements once
@@ -320,11 +321,24 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTask = 'prompt';
         currentThreadId = null;
         submissionMade = false;
+        activityDetectedThisPhase = false;
         showWaitingMessage(false, ui);
         renderTaskUI('prompt', null, ui, escapeHtml); // Use imported function
         clearTimerDisplay(ui);
         // Use imported function to unlock, slight delay for DOM render
         setTimeout(() => { unlockUIForTask('prompt', null); }, 50);
+        const promptInputEl = document.getElementById('promptInput');
+        if (promptInputEl) {
+            // Define listener function
+            const promptActivityListener = () => {
+                console.log("Activity detected: Prompt input");
+                activityDetectedThisPhase = true;
+                // Optional: Remove listener after first activity if needed
+                // promptInputEl.removeEventListener('input', promptActivityListener);
+            };
+            // Attach listener (consider using .once or managing removal)
+            promptInputEl.addEventListener('input', promptActivityListener, { once: true }); // Using once simplifies removal
+        }
     });
 
     socket.on('random_prompt_result', (data) => {
@@ -347,12 +361,28 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTask = 'draw';
         currentThreadId = data.threadId; // Store thread ID for submission
         submissionMade = false;
+        activityDetectedThisPhase = false;
         showWaitingMessage(false, ui);
         renderTaskUI('draw', data, ui, escapeHtml); // Render draw UI
         fabricCanvas = setupCanvas(ui.taskArea); // Setup canvas, store instance
         clearTimerDisplay(ui);
         // Use imported function to unlock, slight delay
         setTimeout(() => { unlockUIForTask('drawing', fabricCanvas); }, 50); // Pass canvas instance
+        if (fabricCanvas) { // Make sure canvas instance exists
+            // Define listener function
+            const canvasActivityListener = (options) => {
+                 // 'path:created' fires after a drawing stroke is completed
+                 // 'mouse:down' fires on click/touch start
+                console.log("Activity detected: Canvas interaction");
+                activityDetectedThisPhase = true;
+                 // Optional: Remove listener after first activity
+                 // fabricCanvas.off('path:created', canvasActivityListener);
+                 // fabricCanvas.off('mouse:down', canvasActivityListener);
+            };
+             // Attach listener (use .once if suitable for Fabric events, or manage removal)
+            fabricCanvas.once('path:created', canvasActivityListener);
+            fabricCanvas.once('mouse:down', canvasActivityListener); // Also detect initial click/touch
+        }
     });
 
     socket.on('task_guess', (data) => {
@@ -360,11 +390,24 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTask = 'guess';
         currentThreadId = data.threadId; // Store thread ID
         submissionMade = false;
+        activityDetectedThisPhase = false;
         showWaitingMessage(false, ui);
         renderTaskUI('guess', data, ui, escapeHtml); // Render guess UI
         clearTimerDisplay(ui);
         // Use imported function to unlock, slight delay
         setTimeout(() => { unlockUIForTask('guessing', null); }, 50); // Pass null for canvas
+        const guessInputEl = document.getElementById('guessInput');
+        if (guessInputEl) {
+            // Define listener function
+            const guessActivityListener = () => {
+                console.log("Activity detected: Guess input");
+                activityDetectedThisPhase = true;
+                // Optional: Remove listener after first activity
+                // guessInputEl.removeEventListener('input', guessActivityListener);
+            };
+            // Attach listener
+            guessInputEl.addEventListener('input', guessActivityListener, { once: true });
+        }
     });
 
     socket.on('start_timer', (data) => {
@@ -386,15 +429,24 @@ document.addEventListener('DOMContentLoaded', () => {
         // Use imported function to lock UI, pass canvas instance
         lockUIForTask(data.phase, true, fabricCanvas);
 
-        // Auto-submit drawing if applicable
+        // Auto-submit drawing ONLY if user interacted with the canvas
         if (data.phase === 'drawing' && currentTask === 'draw' && !submissionMade) {
-            console.log("Client: Auto-submitting drawing due to time up...");
-             // Call imported action function, which will set submissionMade on attempt
-             submitDrawing(socket, gameCode, playerId, currentThreadId, getDrawingData, (msg) => showError(msg, ui), fabricCanvas);
+            if (activityDetectedThisPhase) {
+                console.log("Client: Time's up + Activity detected. Auto-submitting drawing...");
+                // Call imported action function, which will set submissionMade on attempt
+                submitDrawing(socket, gameCode, playerId, currentThreadId, getDrawingData, (msg) => showError(msg, ui), fabricCanvas);
+                // Note: submitDrawing handles locking the UI
+            } else {
+                console.log("Client: Time's up but NO activity detected. Drawing not submitted by client.");
+                // UI is already locked by lockUIForTask call above this block in the original handler.
+                // Show waiting message as submission didn't happen.
+                showWaitingMessage(true, ui);
+            }
         } else if (!submissionMade && currentTask === data.phase) {
-            // If time ran out for the task we were currently on, show waiting message
+            // Time ran out for a phase (like prompt/guess) we were on, but no auto-submit logic here.
+            // UI already locked by lockUIForTask above. Show waiting message.
             console.log(`Client: Time ran out for ${data.phase} before submission.`);
-            showWaitingMessage(true, ui); // Use imported function
+            showWaitingMessage(true, ui);
         } else {
             // Time up for a phase we aren't currently on, or we already submitted
             console.log(`Client: Time up for ${data.phase}, but current task is ${currentTask} or submission already made. No client action needed.`);

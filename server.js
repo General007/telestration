@@ -1,15 +1,18 @@
-// C:\TelestrationsGameApp\server.js
+// telestration/server.js - Corrected Path Casing for 'Public'
+
 // --- Required Modules ---
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const path = require('path');
 const db = require('./db'); // Import database module
+// No longer need 'mssql'
 const { initializeSocketHandlers } = require('./socketHandlers'); // Import socket handler initializer
-const helpers = require('./helpers'); // Import helpers (maybe needed for shutdown?)
+const helpers = require('./helpers'); // Import helpers
 
 // --- Constants ---
-const PORT = process.env.PORT || 80;
+// Use 3000 or 8080 as default, not 80, to avoid permission issues
+const PORT = process.env.PORT || 8080; // Changed default from 80
 
 // --- App Setup ---
 const app = express();
@@ -17,16 +20,19 @@ const server = http.createServer(app);
 const io = new Server(server); // Initialize Socket.IO server
 
 // --- Middleware ---
-app.use(express.static(path.join(__dirname, 'public')));
+// Corrected path casing: 'Public' instead of 'public'
+app.use(express.static(path.join(__dirname, 'Public')));
 
 // --- Routes ---
 app.get('/', (req, res) => {
     console.log("Main page '/' requested.");
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    // Corrected path casing: 'Public' instead of 'public'
+    res.sendFile(path.join(__dirname, 'Public', 'index.html'));
 });
 app.get('/admin', (req, res) => {
     console.log("Admin page '/admin' requested.");
-    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+     // Corrected path casing: 'Public' instead of 'public'
+    res.sendFile(path.join(__dirname, 'Public', 'admin.html'));
 });
 
 // --- Initialize Socket Handlers ---
@@ -40,7 +46,8 @@ server.listen(PORT, async () => {
         await db.getDbPool(); // Ensure DB pool is ready
         await db.clearDebugGame(); // Clear debug game data
         console.log("DB Pool ready and Debug Game potentially cleared.");
-        await helpers.broadcastWaitingGames(io, db); // Broadcast initial list using helper
+        // Call broadcastWaitingGames without db, as helpers now requires it directly
+        await helpers.broadcastWaitingGames(io);
     } catch (err) {
         console.error("Failed DB init or debug clear on startup:", err);
     }
@@ -49,20 +56,14 @@ server.listen(PORT, async () => {
 // --- Graceful Shutdown ---
 async function shutdown(signal) {
     console.log(`Received ${signal}. Shutting down gracefully...`);
-    // Stop accepting new connections - server.close handles this implicitly for http/s
     server.close(async (err) => {
         if (err) { console.error('Error closing HTTP server:', err); process.exit(1); }
         console.log('HTTP server closed.');
-
-        // Close DB pool via db module
         await db.closePool();
-
-        // No activeTimers here anymore, managed within socketHandlers/gameLogic potentially
-        console.log('Shutdown logic complete (timers managed elsewhere).');
+        console.log('Shutdown logic complete.');
         process.exit(0);
     });
 
-    // Force exit after timeout
     setTimeout(() => {
         console.error('Graceful shutdown timed out. Forcing exit.');
         process.exit(1);
